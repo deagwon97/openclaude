@@ -63,6 +63,44 @@ export function stripTrailingWhitespace(str: string): string {
   return result
 }
 
+// Hangul, Kana, CJK ideographs, halfwidth/fullwidth forms — characters around
+// which open-source LLM tokenizers (Qwen/GLM/Solar/…) tend to emit a stray
+// ASCII space at the Latin↔CJK boundary.
+const CJK_CHAR_REGEX =
+  /[ᄀ-ᇿ぀-ヿ㐀-鿿ꥠ-꥿가-힯豈-﫿＀-￯]/
+
+function isCjkChar(c: string | undefined): boolean {
+  return c !== undefined && CJK_CHAR_REGEX.test(c)
+}
+
+/**
+ * Drop ASCII spaces that sit at a CJK boundary. Returns the normalized string
+ * plus a position map (`map[i]` = original index of `normalized[i]`) so the
+ * caller can recover the matched substring from the original file content.
+ */
+function normalizeCjkBoundarySpaces(s: string): {
+  normalized: string
+  map: number[]
+} {
+  const out: string[] = []
+  const map: number[] = []
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!
+    if (c === ' ' && i > 0 && i < s.length - 1) {
+      const prev = s[i - 1]
+      const next = s[i + 1]
+      // Drop the space if either neighbor is CJK. The common artifacts:
+      //   "Chat과" → "Chat 과"   (Latin → space → CJK)
+      //   "LLM입니다" → "LLM 입니다"
+      //   "제공사(예" → "제공사 (예"  (CJK → space → punctuation/Latin)
+      if (isCjkChar(prev) || isCjkChar(next)) continue
+    }
+    out.push(c)
+    map.push(i)
+  }
+  return { normalized: out.join(''), map }
+}
+
 /**
  * Finds the actual string in the file content that matches the search string,
  * accounting for quote normalization
@@ -87,6 +125,25 @@ export function findActualString(
   if (searchIndex !== -1) {
     // Find the actual string in the file that matches
     return fileContent.substring(searchIndex, searchIndex + searchString.length)
+  }
+
+  // CJK boundary-space fallback. Many open-source LLM tokenizers detokenize
+  // each Hangul/CJK glyph as a standalone token and reinsert a single ASCII
+  // space at every Latin↔CJK boundary on output (e.g. file has "Chat과", the
+  // model emits "Chat 과"). The mismatch surfaces as a hard "string not found"
+  // failure that looks to users like a Korean encoding bug. Strip those
+  // boundary spaces on both sides and recover the original substring via the
+  // position map so replacement still hits the exact bytes in the file.
+  const fileCjk = normalizeCjkBoundarySpaces(normalizedFile)
+  const searchCjk = normalizeCjkBoundarySpaces(normalizedSearch)
+  if (searchCjk.normalized.length > 0) {
+    const cjkIndex = fileCjk.normalized.indexOf(searchCjk.normalized)
+    if (cjkIndex !== -1) {
+      const startActual = fileCjk.map[cjkIndex]!
+      const endActual =
+        fileCjk.map[cjkIndex + searchCjk.normalized.length - 1]! + 1
+      return fileContent.substring(startActual, endActual)
+    }
   }
 
   return null
