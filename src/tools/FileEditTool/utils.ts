@@ -69,8 +69,17 @@ export function stripTrailingWhitespace(str: string): string {
 const CJK_CHAR_REGEX =
   /[ᄀ-ᇿ぀-ヿ㐀-鿿ꥠ-꥿가-힯豈-﫿＀-￯]/
 
+const CJK_ADJACENT_SYMBOL_REGEX = /[─━│┃═—–·→←↔⇒⇐…]/
+
 function isCjkChar(c: string | undefined): boolean {
   return c !== undefined && CJK_CHAR_REGEX.test(c)
+}
+
+function isCjkOrAdjacentSymbol(c: string | undefined): boolean {
+  return (
+    c !== undefined &&
+    (CJK_CHAR_REGEX.test(c) || CJK_ADJACENT_SYMBOL_REGEX.test(c))
+  )
 }
 
 /**
@@ -86,14 +95,44 @@ function normalizeCjkBoundarySpaces(s: string): {
   const map: number[] = []
   for (let i = 0; i < s.length; i++) {
     const c = s[i]!
-    if (c === ' ' && i > 0 && i < s.length - 1) {
-      const prev = s[i - 1]
-      const next = s[i + 1]
+    if (c === ' ') {
+      const prev = i > 0 ? s[i - 1] : undefined
+      const next = i < s.length - 1 ? s[i + 1] : undefined
       // Drop the space if either neighbor is CJK. The common artifacts:
       //   "Chat과" → "Chat 과"   (Latin → space → CJK)
       //   "LLM입니다" → "LLM 입니다"
       //   "제공사(예" → "제공사 (예"  (CJK → space → punctuation/Latin)
-      if (isCjkChar(prev) || isCjkChar(next)) continue
+      if (isCjkOrAdjacentSymbol(prev) || isCjkOrAdjacentSymbol(next)) continue
+    }
+    out.push(c)
+    map.push(i)
+  }
+  return { normalized: out.join(''), map }
+}
+
+/**
+ * Per-line strip of trailing ASCII whitespace, with a position map back to the
+ * original string. Used as a matching fallback when LLMs emit old_string
+ * without the file's line-trailing spaces (common for blank "# " comment
+ * separators in YAML/MD).
+ */
+function stripTrailingWhitespaceWithMap(s: string): {
+  normalized: string
+  map: number[]
+} {
+  const out: string[] = []
+  const map: number[] = []
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!
+    if (c === ' ' || c === '\t') {
+      // Look ahead: is this run of spaces/tabs only followed by a line break
+      // (or end of string)? If so, drop it.
+      let j = i
+      while (j < s.length && (s[j] === ' ' || s[j] === '\t')) j++
+      if (j === s.length || s[j] === '\n' || s[j] === '\r') {
+        i = j - 1
+        continue
+      }
     }
     out.push(c)
     map.push(i)
@@ -142,6 +181,23 @@ export function findActualString(
       const startActual = fileCjk.map[cjkIndex]!
       const endActual =
         fileCjk.map[cjkIndex + searchCjk.normalized.length - 1]! + 1
+      return fileContent.substring(startActual, endActual)
+    }
+  }
+
+  // Trailing whitespace fallback. LLM-emitted old_string almost never carries
+  // line-trailing whitespace, but files do — e.g. "# " (hash + space) blank
+  // separators inside commented YAML/MD blocks. Strip per-line trailing
+  // whitespace on both sides and recover the original substring via a position
+  // map so replacement still hits the exact bytes in the file.
+  const fileStripped = stripTrailingWhitespaceWithMap(normalizedFile)
+  const searchStripped = stripTrailingWhitespaceWithMap(normalizedSearch)
+  if (searchStripped.normalized.length > 0) {
+    const idx = fileStripped.normalized.indexOf(searchStripped.normalized)
+    if (idx !== -1) {
+      const startActual = fileStripped.map[idx]!
+      const endActual =
+        fileStripped.map[idx + searchStripped.normalized.length - 1]! + 1
       return fileContent.substring(startActual, endActual)
     }
   }
