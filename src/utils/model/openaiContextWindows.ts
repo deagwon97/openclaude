@@ -221,6 +221,7 @@ const OPENAI_CONTEXT_WINDOWS: Record<string, number> = {
   'glm-5':                    202_752,
   'glm-4.7':                  202_752,
   'qwen3.5-397b-a17b-fp8':    262_144,
+  'Qwen3.5-397B-A17B-FP8':    262_144,
   // Moonshot AI direct API (api.moonshot.ai/v1). Values from Moonshot's
   // published model card — all K2 tier share 256K context. Prefix matching
   // in lookupByKey catches variants like "kimi-k2.6-preview".
@@ -406,6 +407,7 @@ const OPENAI_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // Bumped to 64K to match the model's published max output length — was 32K,
   // which truncated long edits/refactors mid-response.
   'qwen3.5-397b-a17b-fp8':     65_536,
+  'Qwen3.5-397B-A17B-FP8':     65_536,
 
   // Moonshot AI direct API
   'kimi-k2.6':                 32_768,
