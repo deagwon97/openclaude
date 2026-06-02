@@ -361,14 +361,14 @@ export const SettingsSchema = lazySchema(() =>
         .optional()
         .describe(
           'Customize attribution text for commits and PRs. ' +
-            'Each field defaults to the standard Claude Code attribution if not set.',
+            'Unspecified fields are off by default; set a non-empty string to opt in.',
         ),
       includeCoAuthoredBy: z
         .boolean()
         .optional()
         .describe(
           'Deprecated: Use attribution instead. ' +
-            "Whether to include Claude's co-authored by attribution in commits and PRs (defaults to true)",
+            "Whether to include Claude's co-authored by attribution in commits and PRs (defaults to false)",
         ),
       includeGitInstructions: z
         .boolean()
@@ -678,6 +678,20 @@ export const SettingsSchema = lazySchema(() =>
         .boolean()
         .optional()
         .describe('Whether to show tips in the spinner'),
+      sponsoredTipsEnabled: z
+        .boolean()
+        .optional()
+        .describe(
+          'Whether to show sponsored partner tips alongside regular tips (default: true). Disabling does not affect regular tips.',
+        ),
+      sponsoredTipsFrequency: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          'Show at most 1 sponsored tip per N spinner picks. Default 10. Set 0 to disable sponsored tips.',
+        ),
       spinnerVerbs: z
         .object({
           mode: z.enum(['append', 'replace']),
@@ -742,6 +756,15 @@ export const SettingsSchema = lazySchema(() =>
           'Map of agent identifier (subagent_type or team member name) to model name. ' +
             'Use "default" key as fallback. Model name must exist in agentModels. ' +
             'Example: { "Explore": "deepseek-chat", "general-purpose": "gpt-4o", "default": "gpt-4o" }',
+        ),
+      providerFallbackChain: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Ordered list of providerProfile ids. When the active provider returns a rate-limit ' +
+            'or quota error, OpenClaude advances to the next profile in this list (starting after ' +
+            'the currently-active id) and retries the turn. ' +
+            'Example: ["provider_anthropic", "provider_openai", "provider_ollama"]',
         ),
       fastMode: z
         .boolean()
@@ -856,7 +879,7 @@ export const SettingsSchema = lazySchema(() =>
         .optional()
         .describe(
           'Custom directory for plan files, relative to project root. ' +
-            'If not set, defaults to ~/.claude/plans/',
+            'If not set, defaults to ~/.openclaude/plans/',
         ),
       ...(process.env.USER_TYPE === 'ant'
         ? {
@@ -994,6 +1017,12 @@ export const SettingsSchema = lazySchema(() =>
         .optional()
         .describe(
           'Whether the user has accepted the bypass permissions mode dialog',
+        ),
+      skipFullAccessModePermissionPrompt: z
+        .boolean()
+        .optional()
+        .describe(
+          'Whether the user has accepted the full access mode dialog',
         ),
       ...(feature('TRANSCRIPT_CLASSIFIER')
         ? {

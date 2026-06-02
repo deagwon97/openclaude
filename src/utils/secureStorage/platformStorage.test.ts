@@ -1,17 +1,31 @@
 
-import { expect, test, mock, describe, beforeEach, afterEach } from "bun:test";
-import { linuxSecretStorage } from "./linuxSecretStorage.js";
-import { windowsCredentialStorage } from "./windowsCredentialStorage.js";
+import { expect, test, mock, describe, beforeEach, afterEach, afterAll, beforeAll } from "bun:test";
+import * as realExeca from "execa";
 import { getSecureStorageServiceName, CREDENTIALS_SERVICE_SUFFIX } from "./macOsKeychainHelpers.js";
+import {
+  acquireSharedMutationLock,
+  releaseSharedMutationLock,
+} from "../../test/sharedMutationLock.js";
+import type { linuxSecretStorage as LinuxSecretStorage } from "./linuxSecretStorage.js";
+import type { windowsCredentialStorage as WindowsCredentialStorage } from "./windowsCredentialStorage.js";
 
 // Mock execaSync
 const mockExecaSync = mock(() => ({ exitCode: 0, stdout: "" }));
-mock.module("execa", () => ({
-  execaSync: mockExecaSync,
-}));
 
 describe("Secure Storage Platform Implementations", () => {
   const originalEnv = process.env;
+  let linuxSecretStorage: typeof LinuxSecretStorage;
+  let windowsCredentialStorage: typeof WindowsCredentialStorage;
+
+  beforeAll(async () => {
+    await acquireSharedMutationLock("platformStorage.test.ts");
+    mock.module("execa", () => ({
+      ...realExeca,
+      execaSync: mockExecaSync,
+    }));
+    ({ linuxSecretStorage } = await import("./linuxSecretStorage.js"));
+    ({ windowsCredentialStorage } = await import("./windowsCredentialStorage.js"));
+  });
 
   beforeEach(() => {
     process.env = { ...originalEnv };
@@ -22,6 +36,15 @@ describe("Secure Storage Platform Implementations", () => {
 
   afterEach(() => {
     process.env = originalEnv;
+  });
+
+  afterAll(() => {
+    try {
+      mock.restore();
+      mock.module("execa", () => realExeca);
+    } finally {
+      releaseSharedMutationLock();
+    }
   });
 
   const testData = {
@@ -97,13 +120,22 @@ describe("Secure Storage Platform Implementations", () => {
       expect(options2.input).toContain("token'quote");
     });
 
-    test("delete() includes assembly load", () => {
+    test("delete() skips legacy PasswordVault by default", () => {
+      windowsCredentialStorage.delete();
+      expect(mockExecaSync).toHaveBeenCalledTimes(1);
+      const script = mockExecaSync.mock.calls[0][1][1];
+      expect(script).not.toContain("System.Runtime.WindowsRuntime");
+    });
+
+    test("delete() includes legacy assembly load when explicitly enabled", () => {
+      process.env.OPENCLAUDE_ENABLE_LEGACY_WINDOWS_PASSWORDVAULT = "1";
       windowsCredentialStorage.delete();
       const script = mockExecaSync.mock.calls[1][1][1];
       expect(script).toContain("Add-Type -AssemblyName System.Runtime.WindowsRuntime");
     });
 
     test("escapes double quotes in username", () => {
+      process.env.OPENCLAUDE_ENABLE_LEGACY_WINDOWS_PASSWORDVAULT = "1";
       process.env.USER = 'user"name';
       windowsCredentialStorage.read();
       const script = mockExecaSync.mock.calls[1][1][1];
@@ -111,7 +143,17 @@ describe("Secure Storage Platform Implementations", () => {
       expect(script).not.toContain('user"name');
     });
 
-    test("read() falls back to legacy PasswordVault when the DPAPI payload is invalid JSON", () => {
+    test("read() does not touch legacy PasswordVault by default", () => {
+      mockExecaSync.mockImplementationOnce(() => ({ exitCode: 1, stdout: "" }));
+
+      const result = windowsCredentialStorage.read();
+
+      expect(result).toBeNull();
+      expect(mockExecaSync).toHaveBeenCalledTimes(1);
+    });
+
+    test("read() falls back to legacy PasswordVault when explicitly enabled", () => {
+      process.env.OPENCLAUDE_ENABLE_LEGACY_WINDOWS_PASSWORDVAULT = "1";
       mockExecaSync
         .mockImplementationOnce(() => ({ exitCode: 0, stdout: "{not-json" }))
         .mockImplementationOnce(() => ({
@@ -126,6 +168,7 @@ describe("Secure Storage Platform Implementations", () => {
     });
 
     test("read() fails closed when the legacy PasswordVault payload is invalid JSON", () => {
+      process.env.OPENCLAUDE_ENABLE_LEGACY_WINDOWS_PASSWORDVAULT = "1";
       mockExecaSync
         .mockImplementationOnce(() => ({ exitCode: 1, stdout: "" }))
         .mockImplementationOnce(() => ({ exitCode: 0, stdout: "{not-json" }));

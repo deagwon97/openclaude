@@ -25,6 +25,7 @@ import {
   NO_RESPONSE_REQUESTED,
 } from 'src/utils/messages.js'
 import {
+  getDefaultMainLoopModel,
   getDefaultMainLoopModelSetting,
   isNonCustomOpusModel,
 } from 'src/utils/model/model.js'
@@ -51,7 +52,9 @@ import {
 import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mock-limits command
 import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
 import {
+  extractOpenAICategoryHost,
   extractOpenAICategoryMarker,
+  isLocalhostLikeHost,
   type OpenAICompatibilityFailureCategory,
 } from './openaiErrorClassification.js'
 
@@ -68,25 +71,29 @@ function mapOpenAICompatibilityFailureToAssistantMessage(options: {
   category: OpenAICompatibilityFailureCategory
   model: string
   rawMessage: string
+  host?: string
 }): AssistantMessage {
   const switchCmd = getIsNonInteractiveSession() ? '--model' : '/model'
   const compactHint = getIsNonInteractiveSession()
     ? 'Reduce prompt size or start a new session.'
     : 'Run /compact or start a new session with /new.'
+  const isLocalhost = options.host === undefined || isLocalhostLikeHost(options.host)
 
   switch (options.category) {
     case 'localhost_resolution_failed':
     case 'connection_refused':
       return createAssistantAPIErrorMessage({
-        content:
-          'Could not connect to the local OpenAI-compatible provider. Ensure the local server is running, then use OPENAI_BASE_URL=http://127.0.0.1:11434/v1 for Ollama.',
+        content: isLocalhost
+          ? 'Could not connect to the local OpenAI-compatible provider. Ensure the local server is running, then use OPENAI_BASE_URL=http://127.0.0.1:11434/v1 for Ollama.'
+          : `Could not connect to the provider at ${options.host}. Verify OPENAI_BASE_URL is correct and that the host is reachable.`,
         error: 'unknown',
       })
 
     case 'endpoint_not_found':
       return createAssistantAPIErrorMessage({
-        content:
-          'Provider endpoint was not found. Confirm OPENAI_BASE_URL targets an OpenAI-compatible /v1 endpoint (for Ollama: http://127.0.0.1:11434/v1).',
+        content: isLocalhost
+          ? 'Provider endpoint was not found. Confirm OPENAI_BASE_URL targets an OpenAI-compatible /v1 endpoint (for Ollama: http://127.0.0.1:11434/v1).'
+          : `Provider endpoint at ${options.host} returned 404. Verify OPENAI_BASE_URL is correct and that the selected model (${options.model}) is supported by this provider.`,
         error: 'invalid_request',
       })
 
@@ -302,7 +309,7 @@ export function getRequestTooLargeErrorMessage(): string {
     : `Request too large (${limits}). Double press esc to go back and try with a smaller file.`
 }
 export const OAUTH_ORG_NOT_ALLOWED_ERROR_MESSAGE =
-  'Your account does not have access to Claude Code. Please run /login.'
+  'Your account does not have access to OpenClaude. Please run /login.'
 
 export function getTokenRevokedErrorMessage(): string {
   return getIsNonInteractiveSession()
@@ -567,6 +574,7 @@ export function getAssistantMessageFromError(
         category: openaiCategory,
         model,
         rawMessage: error.message,
+        host: extractOpenAICategoryHost(error.message),
       })
     }
   }
@@ -1346,12 +1354,13 @@ export function getErrorMessageIfRefusal(
       : "your provider's acceptable use policy"
 
   const baseMessage = getIsNonInteractiveSession()
-    ? `${API_ERROR_MESSAGE_PREFIX}: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (${usagePolicyUrl}). Try rephrasing the request or attempting a different approach.`
-    : `${API_ERROR_MESSAGE_PREFIX}: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (${usagePolicyUrl}). Please double press esc to edit your last message or start a new session for Claude Code to assist with a different task.`
+    ? `${API_ERROR_MESSAGE_PREFIX}: OpenClaude is unable to respond to this request, which appears to violate our Usage Policy (${usagePolicyUrl}). Try rephrasing the request or attempting a different approach.`
+    : `${API_ERROR_MESSAGE_PREFIX}: OpenClaude is unable to respond to this request, which appears to violate our Usage Policy (${usagePolicyUrl}). Please double press esc to edit your last message or start a new session for OpenClaude to assist with a different task.`
 
+  const defaultModel = getDefaultMainLoopModel()
   const modelSuggestion =
-    model !== 'claude-sonnet-4-20250514'
-      ? ' If you are seeing this refusal repeatedly, try running /model claude-sonnet-4-20250514 to switch models.'
+    model !== defaultModel
+      ? ` If you are seeing this refusal repeatedly, try running /model ${defaultModel} to switch models.`
       : ''
 
   return createAssistantAPIErrorMessage({

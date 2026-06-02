@@ -9,6 +9,12 @@ import {
   refreshAndGetAwsCredentials,
   refreshGcpCredentialsIfNeeded,
 } from 'src/utils/auth.js'
+import {
+  convertEffortValueToLevel,
+  type EffortValue,
+  standardEffortToOpenAI,
+  type OpenAIEffortLevel,
+} from 'src/utils/effort.js'
 import { getUserAgent } from 'src/utils/http.js'
 import { getSmallFastModel } from 'src/utils/model/model.js'
 import {
@@ -28,6 +34,18 @@ import {
   getVertexRegionForModel,
   isEnvTruthy,
 } from '../../utils/envUtils.js'
+import {
+  getMiniMaxBaseUrlOverride,
+  getRouteDefaultBaseUrl,
+  getRouteDefaultModel,
+  getXaiBaseUrlOverride,
+  getXiaomiMimoBaseUrlOverride,
+  resolveEnvOnlyProviderRouteId,
+} from '../../integrations/routeMetadata.js'
+import {
+  shouldUseFirstPartyAnthropicAuth,
+  type ProviderOverride,
+} from './authRouting.js'
 
 const importRuntimeModule = new Function(
   'specifier',
@@ -90,6 +108,134 @@ function createStderrLogger(): ClientOptions['logger'] {
   }
 }
 
+function isMiniMaxModelName(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase()
+  return Boolean(
+    normalized &&
+      (normalized.startsWith('minimax-') || normalized.startsWith('minimax/')),
+  )
+}
+
+function hasMiniMaxModelIntent(model: string | undefined): boolean {
+  return (
+    isMiniMaxModelName(model) ||
+    isMiniMaxModelName(process.env.OPENAI_MODEL) ||
+    isMiniMaxModelName(process.env.ANTHROPIC_MODEL)
+  )
+}
+
+function hasConflictingOpenAIBaseUrlForMiniMax(): boolean {
+  const openAIBaseUrl =
+    process.env.OPENAI_BASE_URL?.trim() || process.env.OPENAI_API_BASE?.trim()
+  return Boolean(openAIBaseUrl && getMiniMaxBaseUrlOverride() === undefined)
+}
+
+function shouldUseMiniMaxEnvOnlyProvider(
+  model: string | undefined,
+  envOnlyProviderRouteId: string | null,
+): boolean {
+  const hasMiniMaxCredential =
+    process.env.MINIMAX_API_KEY?.trim() ||
+    (getMiniMaxBaseUrlOverride() !== undefined &&
+      process.env.ANTHROPIC_API_KEY?.trim())
+
+  if (!hasMiniMaxCredential) {
+    return false
+  }
+
+  if (envOnlyProviderRouteId === 'minimax') {
+    return true
+  }
+
+  return (
+    (hasMiniMaxModelIntent(model) || getMiniMaxBaseUrlOverride() !== undefined) &&
+    !hasConflictingOpenAIBaseUrlForMiniMax()
+  )
+}
+
+function isXaiModelName(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase()
+  return Boolean(
+    normalized &&
+      (normalized.startsWith('grok-') || normalized.startsWith('xai/')),
+  )
+}
+
+function applyMiniMaxEnvOnlyDefaults(model: string | undefined): void {
+  const modelOverride =
+    (isMiniMaxModelName(model) ? model?.trim() : undefined) ??
+    process.env.OPENAI_MODEL?.trim() ??
+    process.env.ANTHROPIC_MODEL?.trim() ??
+    undefined
+
+  const apiKey =
+    process.env.MINIMAX_API_KEY?.trim() ||
+    process.env.ANTHROPIC_API_KEY?.trim()
+  if (apiKey) {
+    process.env.ANTHROPIC_API_KEY = apiKey
+  }
+
+  process.env.ANTHROPIC_BASE_URL = 'https://api.minimax.io/anthropic'
+  process.env.ANTHROPIC_MODEL =
+    (isMiniMaxModelName(modelOverride)
+      ? modelOverride
+      : undefined) ??
+    getRouteDefaultModel('minimax')
+  delete process.env.CLAUDE_CODE_USE_OPENAI
+  delete process.env.OPENAI_API_FORMAT
+  delete process.env.OPENAI_AUTH_HEADER
+  delete process.env.OPENAI_AUTH_SCHEME
+  delete process.env.OPENAI_AUTH_HEADER_VALUE
+}
+
+function isXiaomiMimoModelName(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase()
+  return Boolean(
+    normalized &&
+      (normalized.startsWith('mimo-') || normalized.startsWith('mimo/')),
+  )
+}
+
+function applyXiaomiMimoEnvOnlyDefaults(): void {
+  const baseUrlOverride = getXiaomiMimoBaseUrlOverride()
+  const hasBaseOverride = baseUrlOverride !== undefined
+  const modelOverride = process.env.OPENAI_MODEL?.trim() || undefined
+
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.OPENAI_BASE_URL =
+    baseUrlOverride ?? getRouteDefaultBaseUrl('xiaomi-mimo')
+  process.env.OPENAI_MODEL =
+    (hasBaseOverride || isXiaomiMimoModelName(modelOverride)
+      ? modelOverride
+      : undefined) ??
+    getRouteDefaultModel('xiaomi-mimo')
+  process.env.OPENAI_API_KEY = process.env.MIMO_API_KEY
+  delete process.env.OPENAI_API_FORMAT
+  delete process.env.OPENAI_AUTH_HEADER
+  delete process.env.OPENAI_AUTH_SCHEME
+  delete process.env.OPENAI_AUTH_HEADER_VALUE
+}
+
+function applyXaiEnvOnlyDefaults(): void {
+  const baseUrlOverride = getXaiBaseUrlOverride()
+  const hasXaiBaseOverride = baseUrlOverride !== undefined
+  const modelOverride = process.env.OPENAI_MODEL?.trim() || undefined
+
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.OPENAI_BASE_URL =
+    baseUrlOverride ?? getRouteDefaultBaseUrl('xai')
+  process.env.OPENAI_MODEL =
+    (hasXaiBaseOverride || isXaiModelName(modelOverride)
+      ? modelOverride
+      : undefined) ??
+    getRouteDefaultModel('xai')
+  process.env.OPENAI_API_KEY = process.env.XAI_API_KEY
+  delete process.env.OPENAI_API_FORMAT
+  delete process.env.OPENAI_AUTH_HEADER
+  delete process.env.OPENAI_AUTH_SCHEME
+  delete process.env.OPENAI_AUTH_HEADER_VALUE
+}
+
 export async function getAnthropicClient({
   apiKey,
   maxRetries,
@@ -97,14 +243,22 @@ export async function getAnthropicClient({
   fetchOverride,
   source,
   providerOverride,
+  effortValue,
 }: {
   apiKey?: string
   maxRetries: number
   model?: string
   fetchOverride?: ClientOptions['fetch']
   source?: string
-  providerOverride?: { model: string; baseURL: string; apiKey: string }
+  providerOverride?: ProviderOverride
+  effortValue?: EffortValue
 }): Promise<Anthropic> {
+  // Convert the runtime effort value to the OpenAI-shaped enum the shim
+  // expects. Undefined → shim falls back to descriptor/alias defaults.
+  const shimReasoningEffort: OpenAIEffortLevel | undefined =
+    effortValue !== undefined
+      ? standardEffortToOpenAI(convertEffortValueToLevel(effortValue))
+      : undefined
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
   const clientApp = process.env.CLAUDE_AGENT_SDK_CLIENT_APP
@@ -135,11 +289,42 @@ export async function getAnthropicClient({
     defaultHeaders['x-anthropic-additional-protection'] = 'true'
   }
 
-  logForDebugging('[API:auth] OAuth token check starting')
-  await checkAndRefreshOAuthTokenIfNeeded()
-  logForDebugging('[API:auth] OAuth token check complete')
+  const envOnlyProviderRouteId = resolveEnvOnlyProviderRouteId(process.env)
+  const useMiniMaxEnvOnlyProvider = shouldUseMiniMaxEnvOnlyProvider(
+    model,
+    envOnlyProviderRouteId,
+  )
+  const useXiaomiMimoEnvOnlyProvider =
+    envOnlyProviderRouteId === 'xiaomi-mimo' && !useMiniMaxEnvOnlyProvider
+  const useXaiEnvOnlyProvider =
+    envOnlyProviderRouteId === 'xai' && !useMiniMaxEnvOnlyProvider
+  if (useMiniMaxEnvOnlyProvider) {
+    applyMiniMaxEnvOnlyDefaults(model)
+  }
+  if (useXiaomiMimoEnvOnlyProvider) {
+    applyXiaomiMimoEnvOnlyDefaults()
+  }
+  if (useXaiEnvOnlyProvider) {
+    applyXaiEnvOnlyDefaults()
+  }
 
-  if (!isClaudeAISubscriber()) {
+  const shouldUseFirstPartyAuth =
+    shouldUseFirstPartyAnthropicAuth(providerOverride)
+  const useMiniMaxNativeProvider =
+    useMiniMaxEnvOnlyProvider ||
+    (getAPIProvider() === 'minimax' &&
+      !isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI))
+
+  if (shouldUseFirstPartyAuth) {
+    logForDebugging('[API:auth] OAuth token check starting')
+    await checkAndRefreshOAuthTokenIfNeeded()
+    logForDebugging('[API:auth] OAuth token check complete')
+  }
+
+  const isClaudeAiSubscriber =
+    shouldUseFirstPartyAuth && isClaudeAISubscriber()
+
+  if (shouldUseFirstPartyAuth && !isClaudeAiSubscriber) {
     await configureApiKeyHeaders(defaultHeaders, getIsNonInteractiveSession())
   }
 
@@ -173,6 +358,7 @@ export async function getAnthropicClient({
       maxRetries,
       timeout: parseInt(process.env.API_TIMEOUT_MS || String(600 * 1000), 10),
       providerOverride,
+      reasoningEffort: shimReasoningEffort,
     }) as unknown as Anthropic
   }
   // GitHub provider in native Anthropic API mode: send requests in Anthropic
@@ -195,6 +381,8 @@ export async function getAnthropicClient({
     return new Anthropic(nativeArgs)
   }
   if (
+    useXiaomiMimoEnvOnlyProvider ||
+    useXaiEnvOnlyProvider ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_GITHUB) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI) ||
@@ -205,6 +393,7 @@ export async function getAnthropicClient({
       defaultHeaders,
       maxRetries,
       timeout: parseInt(process.env.API_TIMEOUT_MS || String(600 * 1000), 10),
+      reasoningEffort: shimReasoningEffort,
     }) as unknown as Anthropic
   }
   if (isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)) {
@@ -362,15 +551,21 @@ export async function getAnthropicClient({
 
   // Determine authentication method based on available tokens
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-    apiKey: isClaudeAISubscriber() ? null : apiKey || getAnthropicApiKey(),
-    authToken: isClaudeAISubscriber()
+    apiKey: isClaudeAiSubscriber
+      ? null
+      : useMiniMaxNativeProvider
+        ? process.env.MINIMAX_API_KEY || process.env.ANTHROPIC_API_KEY
+        : apiKey || getAnthropicApiKey(),
+    authToken: isClaudeAiSubscriber
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,
     // Set baseURL from OAuth config when using staging OAuth
     ...(process.env.USER_TYPE === 'ant' &&
     isEnvTruthy(process.env.USE_STAGING_OAUTH)
       ? { baseURL: getOauthConfig().BASE_API_URL }
-      : {}),
+      : process.env.ANTHROPIC_BASE_URL
+        ? { baseURL: process.env.ANTHROPIC_BASE_URL }
+        : {}),
     ...ARGS,
     ...(isDebugToStdErr() && { logger: createStderrLogger() }),
   }

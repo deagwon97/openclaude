@@ -18,9 +18,13 @@ npm --version
 ## 2. Install OpenClaude
 
 ```bash
-npm install -g @gitlawb/openclaude
+npm install -g @gitlawb/openclaude@latest
 ```
+On Arch Linux, you can alternatively install OpenClaude via the community-maintained [AUR package](https://aur.archlinux.org/packages/openclaude):
 
+```bash
+paru -S openclaude
+```
 ## 3. Pick One Provider
 
 ### Option A: OpenAI
@@ -41,10 +45,12 @@ openclaude
 export CLAUDE_CODE_USE_OPENAI=1
 export OPENAI_API_KEY=sk-your-key-here
 export OPENAI_BASE_URL=https://api.deepseek.com/v1
-export OPENAI_MODEL=deepseek-chat
+export OPENAI_MODEL=deepseek-v4-flash
 
 openclaude
 ```
+
+Use `deepseek-v4-pro` when you want the stronger model. `deepseek-chat` and `deepseek-reasoner` still work as DeepSeek's legacy API aliases.
 
 ### Option C: Ollama
 
@@ -126,14 +132,27 @@ Check the basics:
 
 ## 6. Updating OpenClaude
 
+**Via npm:**
 ```bash
 npm install -g @gitlawb/openclaude@latest
 ```
 
+**Via AUR:**
+```bash
+paru
+```
+*(Or use your preferred AUR helper like `yay -Syu`)*
+
 ## 7. Uninstalling OpenClaude
 
+**Via npm:**
 ```bash
 npm uninstall -g @gitlawb/openclaude
+```
+
+**Via AUR (Arch Linux):**
+```bash
+paru -Rns openclaude
 ```
 
 ## Need Advanced Setup?
@@ -141,3 +160,4 @@ npm uninstall -g @gitlawb/openclaude
 Use:
 
 - [Advanced Setup](advanced-setup.md)
+  For Codex, Gemini, Mistral, LiteLLM, provider profiles, and runtime diagnostics.

@@ -72,7 +72,7 @@ export async function setup(
     // biome-ignore lint/suspicious/noConsole:: intentional console output
     console.error(
       chalk.bold.red(
-        'Error: Claude Code requires Node.js version 18 or higher.',
+        'Error: OpenClaude requires Node.js version 18 or higher.',
       ),
     )
     process.exit(1)
@@ -382,6 +382,7 @@ export async function setup(
   // If permission mode is set to bypass, verify we're in a safe environment
   if (
     permissionMode === 'bypassPermissions' ||
+    permissionMode === 'fullAccess' ||
     allowDangerouslySkipPermissions
   ) {
     // Check if running as root/sudo on Unix-like systems

@@ -55,7 +55,7 @@ export const OutputFormatSchema = lazySchema(() =>
 // ============================================================================
 
 export const ApiKeySourceSchema = lazySchema(() =>
-  z.enum(['user', 'project', 'org', 'temporary', 'oauth']),
+  z.enum(['user', 'project', 'org', 'temporary', 'oauth', 'none']),
 )
 
 export const ConfigScopeSchema = lazySchema(() =>
@@ -336,12 +336,20 @@ export const PermissionResultSchema = lazySchema(() =>
 
 export const PermissionModeSchema = lazySchema(() =>
   z
-    .enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])
+    .enum([
+      'default',
+      'acceptEdits',
+      'bypassPermissions',
+      'fullAccess',
+      'plan',
+      'dontAsk',
+    ])
     .describe(
       'Permission mode for controlling how tool executions are handled. ' +
         "'default' - Standard behavior, prompts for dangerous operations. " +
         "'acceptEdits' - Auto-accept file edit operations. " +
-        "'bypassPermissions' - Bypass all permission checks (requires allowDangerouslySkipPermissions). " +
+        "'bypassPermissions' - Bypass normal permission prompts while preserving hard safety checks (requires allowDangerouslySkipPermissions). " +
+        "'fullAccess' - Bypass normal permission prompts and hard safety-check prompts (requires allowDangerouslySkipPermissions). " +
         "'plan' - Planning mode, no actual tool execution. " +
         "'dontAsk' - Don't prompt for permissions, deny if not pre-approved.",
     ),
@@ -1851,6 +1859,18 @@ export const SDKSessionInfoSchema = lazySchema(() =>
     .describe('Session metadata returned by listSessions and getSessionInfo.'),
 )
 
+export const SDKPermissionRequestMessageSchema = lazySchema(() =>
+  z.object({
+    type: z.literal('permission_request'),
+    request_id: z.string().describe('Unique request ID for this permission prompt'),
+    tool_name: z.string().describe('Name of the tool requesting permission'),
+    tool_use_id: z.string().describe('Tool use ID for matching with respondToPermission'),
+    input: z.record(z.string(), z.unknown()).describe('Tool input parameters'),
+    uuid: UUIDPlaceholder(),
+    session_id: z.string(),
+  }),
+)
+
 export const SDKMessageSchema = lazySchema(() =>
   z.union([
     SDKAssistantMessageSchema(),
@@ -1877,6 +1897,7 @@ export const SDKMessageSchema = lazySchema(() =>
     SDKRateLimitEventSchema(),
     SDKElicitationCompleteMessageSchema(),
     SDKPromptSuggestionMessageSchema(),
+    SDKPermissionRequestMessageSchema(),
   ]),
 )
 
