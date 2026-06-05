@@ -21,5 +21,7 @@ export default defineBrand({
     'google/gemini-3.1-flash-lite',
     'google/gemini-2.5-pro',
     'google/gemini-2.0-flash',
+    'gemma-4-26b-a4b-it',
+    'gemma-4-31b-it',
   ],
 })
