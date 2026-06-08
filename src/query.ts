@@ -1630,6 +1630,8 @@ async function* queryLoop(
         toolUseContext,
         querySource,
         stopHookActive,
+        deps.goalEvaluationDeps,
+        deps.stopHookExecutionDeps,
       )
 
       if (stopHookResult.preventContinuation) {
@@ -1659,7 +1661,7 @@ async function* queryLoop(
           maxOutputTokensOverride: undefined,
           providerMaxOutputTokensCap,
           pendingToolUseSummary: undefined,
-          stopHookActive: true,
+          stopHookActive: stopHookResult.stopHookActive,
           turnCount,
           continuationNudgeCount: state.continuationNudgeCount,
           transition: { reason: 'stop_hook_blocking' },

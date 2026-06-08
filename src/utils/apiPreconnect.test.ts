@@ -3,11 +3,24 @@ import {
   acquireSharedMutationLock,
   releaseSharedMutationLock,
 } from '../test/sharedMutationLock.js'
+import * as actualProviders from './model/providers.js'
 
 const originalEnv = { ...process.env }
 const originalFetch = globalThis.fetch
 
+function getMockApiProvider() {
+  if (process.env.CLAUDE_CODE_USE_OPENAI === '1') return 'openai'
+  if (process.env.CLAUDE_CODE_USE_GEMINI === '1') return 'gemini'
+  if (process.env.CLAUDE_CODE_USE_GITHUB === '1') return 'github'
+  return 'firstParty'
+}
+
 async function importFreshModule() {
+  mock.restore()
+  mock.module('./model/providers.js', () => ({
+    ...actualProviders,
+    getAPIProvider: getMockApiProvider,
+  }))
   return import(`./apiPreconnect.ts?ts=${Date.now()}-${Math.random()}`)
 }
 
@@ -21,6 +34,7 @@ afterEach(() => {
     process.env = { ...originalEnv }
     globalThis.fetch = originalFetch
     mock.restore()
+    mock.module('./model/providers.js', () => actualProviders)
   } finally {
     releaseSharedMutationLock()
   }
@@ -88,6 +102,10 @@ describe('preconnectAnthropicApi', () => {
     delete process.env.CLAUDE_CODE_CLIENT_CERT
     delete process.env.CLAUDE_CODE_CLIENT_KEY
 
+    mock.module('./model/providers.js', () => ({
+      ...actualProviders,
+      getAPIProvider: () => 'firstParty',
+    }))
     const fetchMock = mock(() => Promise.resolve(new Response(null, { status: 200 })))
     globalThis.fetch = fetchMock as typeof globalThis.fetch
 
