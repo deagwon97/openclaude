@@ -8,11 +8,11 @@ import {
 } from '../bootstrap/state.js'
 import * as actualModel from './model/model.js'
 import * as actualProviders from './model/providers.js'
-import * as actualSettings from './settings/settings.js'
 import {
   resetSettingsCache,
   setSessionSettingsCache,
 } from './settings/settingsCache.js'
+import * as actualSettings from './settings/settings.js'
 import type { SettingsJson } from './settings/types.js'
 
 let getAttributionTexts: (typeof import('./attribution.js'))['getAttributionTexts']
@@ -135,6 +135,9 @@ beforeEach(async () => {
     ...actualProviders,
     getAPIProvider: () => 'openai',
   }))
+  // Stub settings directly so attribution.ts observes this test's intended
+  // settings even when a previous serialized Bun test has mocked the settings
+  // module or a nonced import creates a separate cache instance.
   mock.module('./settings/settings.js', () => ({
     ...actualSettings,
     getInitialSettings: () => testSettings,
