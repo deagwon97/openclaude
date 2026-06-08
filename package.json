@@ -20,6 +20,8 @@
     "dist/sdk.mjs",
     "src/entrypoints/sdk.d.ts",
     "src/entrypoints/sdk/coreTypes.generated.ts",
+    "scripts/windows/openclaude-aliases.ps1",
+    "docs/windows-aliases-and-launchers.md",
     "README.md"
   ],
   "scripts": {
