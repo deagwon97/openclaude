@@ -262,7 +262,7 @@ function sleepMs(ms: number): Promise<void> {
 
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content?: string | Array<{ type: string; text?: string; image_url?: { url: string } }>
+  content?: string | OpenAIContentPart[]
   tool_calls?: Array<{
     id: string
     type: 'function'
@@ -280,6 +280,10 @@ interface OpenAIMessage {
    */
   reasoning_content?: string
 }
+
+type OpenAIContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
 
 interface OpenAITool {
   type: 'function'
@@ -311,10 +315,32 @@ function convertSystemPrompt(
   return String(system)
 }
 
+function ensureTextPartForImageContent(
+  parts: OpenAIContentPart[],
+): OpenAIContentPart[] {
+  const hasImage = parts.some(part => part.type === 'image_url')
+  if (!hasImage) {
+    return parts
+  }
+
+  const hasText = parts.some(
+    part => part.type === 'text' && (part.text ?? '').trim().length > 0,
+  )
+  if (hasText) {
+    return parts
+  }
+
+  return [{ type: 'text', text: 'Image attached.' }, ...parts]
+}
+
+function joinTextContentParts(parts: OpenAIContentPart[]): string {
+  return parts.map(part => part.type === 'text' ? part.text : '').join('')
+}
+
 function convertToolResultContent(
   content: unknown,
   isError?: boolean,
-): string | Array<{ type: string; text?: string; image_url?: { url: string } }> {
+): string | OpenAIContentPart[] {
   if (typeof content === 'string') {
     return isError ? `Error: ${content}` : content
   }
@@ -323,11 +349,7 @@ function convertToolResultContent(
     return isError ? `Error: ${text}` : text
   }
 
-  const parts: Array<{
-    type: string
-    text?: string
-    image_url?: { url: string }
-  }> = []
+  const parts: OpenAIContentPart[] = []
   for (const block of content) {
     if (block?.type === 'text' && typeof block.text === 'string') {
       parts.push({ type: 'text', text: block.text })
@@ -379,11 +401,11 @@ function convertToolResultContent(
 
 function convertContentBlocks(
   content: unknown,
-): string | Array<{ type: string; text?: string; image_url?: { url: string } }> {
+): string | OpenAIContentPart[] {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return String(content ?? '')
 
-  const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
+  const parts: OpenAIContentPart[] = []
   for (const block of content) {
     switch (block.type) {
       case 'text':
@@ -434,7 +456,7 @@ function convertContentBlocks(
     return parts.map(p => p.text ?? '').join('\n\n')
   }
 
-  return parts
+  return ensureTextPartForImageContent(parts)
 }
 
 function isGeminiMode(): boolean {
@@ -601,7 +623,7 @@ function convertMessages(
             return typeof c === 'string'
               ? c
               : Array.isArray(c)
-                ? c.map((p: { text?: string }) => p.text ?? '').join('')
+                ? joinTextContentParts(c)
                 : ''
           })(),
         }
@@ -704,7 +726,7 @@ function convertMessages(
             return typeof c === 'string'
               ? c
               : Array.isArray(c)
-                ? c.map((p: { text?: string }) => p.text ?? '').join('')
+                ? joinTextContentParts(c)
                 : ''
           })(),
         }
@@ -751,15 +773,8 @@ function convertMessages(
           prevContent + (prevContent && curContent ? '\n' : '') + curContent
       } else {
         const toArray = (
-          c:
-            | string
-            | Array<{ type: string; text?: string; image_url?: { url: string } }>
-            | undefined,
-        ): Array<{
-          type: string
-          text?: string
-          image_url?: { url: string }
-        }> => {
+          c: string | OpenAIContentPart[] | undefined,
+        ): OpenAIContentPart[] => {
           if (!c) return []
           if (typeof c === 'string') return c ? [{ type: 'text', text: c }] : []
           return c
