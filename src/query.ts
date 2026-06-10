@@ -111,7 +111,10 @@ import {
   updateToolFailureLoopGuard,
 } from './query/toolFailureLoopGuard.js'
 import { buildQueryConfig } from './query/config.js'
-import { getGlobalConfig } from './utils/config.js'
+import {
+  getGlobalConfig,
+  normalizeMaxMessagesCompactionThreshold,
+} from './utils/config.js'
 import { productionDeps, type QueryDeps } from './query/deps.js'
 import type { Terminal, Continue } from './query/transitions.js'
 import { feature } from 'bun:bundle'
@@ -564,11 +567,17 @@ async function* queryLoop(
     const canForceCompact =
       querySource !== 'compact' && querySource !== 'session_memory'
     if (canForceCompact) {
-      const MAX_ACTIVE_MESSAGES = Number.parseInt(
-        process.env.OPENCLAUDE_MAX_ACTIVE_MESSAGES ?? '200',
-        10,
+      const configSetting = normalizeMaxMessagesCompactionThreshold(
+        getGlobalConfig().maxMessagesCompactionThreshold,
       )
-      if (messagesForQuery.length > MAX_ACTIVE_MESSAGES) {
+      const envSetting = process.env.OPENCLAUDE_MAX_ACTIVE_MESSAGES
+      const maxActiveMessages = configSetting !== 'off'
+        ? Number.parseInt(configSetting, 10)
+        : envSetting
+          ? Number.parseInt(envSetting, 10)
+          : 0
+
+      if (maxActiveMessages > 0 && messagesForQuery.length > maxActiveMessages) {
         tracking = {
           ...(tracking ?? { compacted: false, turnId: '', turnCounter: 0 }),
           forceReason: 'message-count',
