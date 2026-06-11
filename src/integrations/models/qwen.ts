@@ -37,4 +37,20 @@ export default [
   qwenModel('Qwen/Qwen3.5-9B', 'Qwen 3.5 9B', 128_000, 32_768),
   qwenModel('qwen3.5-397b-a17b-fp8', 'Qwen 3.5 397B A17B FP8', 262_144, 65_536),
   qwenModel('Qwen3.5-397B-A17B-FP8', 'Qwen 3.5 397B A17B FP8', 262_144, 65_536),
+  // Text-only (no vision per the OpenRouter catalog), so it skips the
+  // qwenModel helper's vision defaults.
+  defineModel({
+    id: 'qwen3.7-max',
+    label: 'Qwen 3.7 Max',
+    brandId: 'qwen',
+    vendorId: 'openai',
+    classification: ['chat', 'reasoning', 'coding'],
+    defaultModel: 'qwen3.7-max',
+    capabilities: {
+      ...qwenCapabilities,
+      supportsVision: false,
+    },
+    contextWindow: 1_000_000,
+    maxOutputTokens: 65_536,
+  }),
 ]
