@@ -97,6 +97,8 @@ import {
   isToolSearchEnabled,
 } from '../../utils/toolSearch.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../analytics/growthbook.js'
+import { isAnthropicProvider } from '../../utils/betas.js'
+import { isGithubNativeAnthropicMode } from '../../utils/model/providers.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -386,6 +388,20 @@ export function mergeHookInstructions(
 }
 
 /**
+ * Whether the active provider can share the main conversation's prompt cache
+ * during compaction. True for Anthropic-capable providers (firstParty/Bedrock/
+ * Vertex/Foundry) AND GitHub Native Anthropic mode (CLAUDE_CODE_USE_GITHUB=1
+ * with a Claude model): the latter routes through the native Anthropic client
+ * where cache_control / prompt caching works. Mirrors the beta-header gate in
+ * betas.ts so compaction cache-sharing and request shaping stay aligned —
+ * otherwise GitHub Native Anthropic sessions would always take the cold-cache
+ * compaction path the forked-agent flow was designed to avoid.
+ */
+function isCompactionCacheSharingCompatible(model: string | undefined): boolean {
+  return isAnthropicProvider() || isGithubNativeAnthropicMode(model)
+}
+
+/**
  * Creates a compact version of a conversation by summarizing older messages
  * and preserving recent conversation history.
  */
@@ -432,14 +448,23 @@ export async function compactConversation(
     context.setResponseLength?.(() => 0)
     context.onCompactProgress?.({ type: 'compact_start' })
 
-    // 3P default: true — forked-agent path reuses main conversation's prompt cache.
-    // Experiment (Jan 2026) confirmed: false path is 98% cache miss, costs ~0.76% of
-    // fleet cache_creation (~38B tok/day), concentrated in ephemeral envs (CCR/GHA/SDK)
-    // with cold GB cache and 3P providers where GB is disabled. GB gate kept as kill-switch.
-    const promptCacheSharingEnabled = getFeatureValue_CACHED_MAY_BE_STALE(
-      'tengu_compact_cache_prefix',
-      true,
-    )
+    // Cache-sharing is enabled only for Anthropic-capable providers (incl.
+    // GitHub Native Anthropic mode) when the tengu_compact_cache_prefix flag is
+    // on. Other (3P) providers remain incompatible: they don't share the main
+    // conversation's prompt cache, and the forked-agent path would send
+    // Anthropic-only params (betas, context_management) that they reject.
+    // Experiment (Jan 2026): the false path is 98% cache miss, costing ~0.76%
+    // of fleet cache_creation (~38B tok/day), concentrated in ephemeral envs
+    // (CCR/GHA/SDK) with cold GB cache and 3P providers where GB is disabled.
+    // The GB flag is kept as a kill-switch.
+    // streamCompactSummary() (below) follows the same gate; see also the
+    // provider-gate tests in src/services/compact/compact.test.ts.
+    const promptCacheSharingEnabled =
+      isCompactionCacheSharingCompatible(context.options.mainLoopModel) &&
+      getFeatureValue_CACHED_MAY_BE_STALE(
+        'tengu_compact_cache_prefix',
+        true,
+      )
 
     const compactPrompt = getCompactPrompt(customInstructions)
     const summaryRequest = createUserMessage({
@@ -1155,11 +1180,21 @@ async function streamCompactSummary({
   // When prompt cache sharing is enabled, use forked agent to reuse the
   // main conversation's cached prefix (system prompt, tools, context messages).
   // Falls back to regular streaming path on failure.
-  // 3P default: true — see comment at the other tengu_compact_cache_prefix read above.
-  const promptCacheSharingEnabled = getFeatureValue_CACHED_MAY_BE_STALE(
-    'tengu_compact_cache_prefix',
-    true,
+  // Same provider-gated cache-sharing behavior as compactConversation() above
+  // (see that block for the full rationale and experiment data): only
+  // Anthropic-capable providers (incl. GitHub Native Anthropic mode) share the
+  // prompt cache; other 3P providers are incompatible and would send
+  // Anthropic-only params that they reject. The shared predicate makes this
+  // safe to call from 3P provider paths.
+  const cacheSharingAvailable = isCompactionCacheSharingCompatible(
+    context.options.mainLoopModel,
   )
+  const promptCacheSharingEnabled =
+    cacheSharingAvailable &&
+    getFeatureValue_CACHED_MAY_BE_STALE(
+      'tengu_compact_cache_prefix',
+      true,
+    )
   // Send keep-alive signals during compaction to prevent remote session
   // WebSocket idle timeouts from dropping bridge connections. Compaction
   // API calls can take 5-10+ seconds, during which no other messages
