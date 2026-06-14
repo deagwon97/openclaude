@@ -1224,6 +1224,17 @@ async function streamCompactSummary({
         // creating a thinking config mismatch that invalidates the cache.
         // The streaming fallback path (below) can safely set maxOutputTokensOverride
         // since it doesn't share cache with the main thread.
+        // Track real character-level progress from text deltas via onStreamEvent.
+        // Output is ~25% of input tokens, converted to chars (×4), so
+        // (preCompactTokenCount * 0.25) * 4 = preCompactTokenCount chars.
+        // Capped by COMPACT_MAX_OUTPUT_TOKENS*4 for very large sessions.
+        const estimatedOutputChars = Math.min(
+          Math.max(preCompactTokenCount, COMPACT_MAX_OUTPUT_TOKENS),
+          COMPACT_MAX_OUTPUT_TOKENS * 4,
+        )
+        let totalCharsStreamed = 0
+        let lastEmittedRatio = 0
+
         // Use a child AbortController that properly propagates parent aborts
         // (user ESC) and cleans up listeners automatically via createChildAbortController.
         const forkAbortController = context.abortController
@@ -1243,6 +1254,17 @@ async function streamCompactSummary({
               maxTurns: 1,
               skipCacheWrite: true,
               overrides: { abortController: forkAbortController },
+              onStreamEvent: event => {
+                if (event.event?.delta?.type === 'text_delta') {
+                  const charactersStreamed = event.event.delta.text?.length ?? 0
+                  totalCharsStreamed += charactersStreamed
+                  const ratio = Math.min(0.95, totalCharsStreamed / Math.max(1, estimatedOutputChars))
+                  if (ratio - lastEmittedRatio >= 0.02) {
+                    lastEmittedRatio = ratio
+                    context.onCompactProgress?.({ type: 'compact_progress', ratio })
+                  }
+                }
+              },
             }),
             new Promise<never>((_, reject) => {
               timeoutId = setTimeout(() => {
@@ -1264,6 +1286,8 @@ async function streamCompactSummary({
         // "Request was aborted." as the summary — the text doesn't start with
         // "API Error" so the caller's startsWithApiErrorPrefix guard misses it.
         if (assistantMsg && assistantText && !assistantMsg.isApiErrorMessage) {
+          // Forked agent completed — snap progress to 100%
+          context.onCompactProgress?.({ type: 'compact_progress', ratio: 1 })
           // Skip success logging for PTL error text — it's returned so the
           // caller's retry loop catches it, but it's not a successful summary.
           if (!assistantText.startsWith(PROMPT_TOO_LONG_ERROR_MESSAGE)) {
@@ -1309,6 +1333,18 @@ async function streamCompactSummary({
       false,
     )
     const maxAttempts = retryEnabled ? MAX_COMPACT_STREAMING_RETRIES : 1
+
+    // Estimate output target: summary is ~25% of input tokens, converted to
+    // chars (×4), so (preCompactTokenCount * 0.25) * 4 = preCompactTokenCount chars.
+    // Capped by COMPACT_MAX_OUTPUT_TOKENS*4 for very large sessions.
+    // Floor at COMPACT_MAX_OUTPUT_TOKENS to handle cases where
+    // tokenCountWithEstimation returns a fallback estimate (e.g. after /resume).
+    const estimatedOutputChars = Math.min(
+      Math.max(preCompactTokenCount, COMPACT_MAX_OUTPUT_TOKENS),
+      COMPACT_MAX_OUTPUT_TOKENS * 4,
+    )
+    let totalCharsStreamed = 0
+    let lastEmittedRatio = 0
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Reset state for retry
@@ -1402,7 +1438,15 @@ async function streamCompactSummary({
           event.event.delta.type === 'text_delta'
         ) {
           const charactersStreamed = event.event.delta.text.length
+          totalCharsStreamed += charactersStreamed
           context.setResponseLength?.(length => length + charactersStreamed)
+
+          // Emit progress tick — cap at 95% until we get the final message
+          const ratio = Math.min(0.95, totalCharsStreamed / Math.max(1, estimatedOutputChars))
+          if (ratio - lastEmittedRatio >= 0.02) {
+            lastEmittedRatio = ratio
+            context.onCompactProgress?.({ type: 'compact_progress', ratio })
+          }
         }
 
         if (event.type === 'assistant') {
@@ -1413,6 +1457,8 @@ async function streamCompactSummary({
       }
 
       if (response) {
+        // Streaming complete — snap progress to 100%
+        context.onCompactProgress?.({ type: 'compact_progress', ratio: 1 })
         return response
       }
 
